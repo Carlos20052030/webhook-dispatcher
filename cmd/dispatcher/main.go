@@ -137,6 +137,7 @@ func run() error {
 func newRouter(s *store.Store, db *sql.DB, rdb *redis.Client, cfg *config.Config) http.Handler {
 	wh := &api.WebhookHandler{Store: s}
 	ev := &api.EventHandler{Store: s}
+	dh := &api.DeliveryHandler{Store: s}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthz(db, rdb))
@@ -147,6 +148,8 @@ func newRouter(s *store.Store, db *sql.DB, rdb *redis.Client, cfg *config.Config
 		api.RequireJWT(cfg.JWTSecret)(http.HandlerFunc(wh.List)))
 	mux.Handle("DELETE /webhooks/{id}",
 		api.RequireJWT(cfg.JWTSecret)(http.HandlerFunc(wh.Delete)))
+	mux.Handle("GET /deliveries",
+		api.RequireJWT(cfg.JWTSecret)(http.HandlerFunc(dh.List)))
 
 	mux.Handle("POST /events",
 		api.RequireIngestToken(cfg.IngestToken)(http.HandlerFunc(ev.Ingest)))
