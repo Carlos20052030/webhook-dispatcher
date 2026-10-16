@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -17,7 +18,9 @@ import (
 
 	"github.com/Carlos20052030/webhook-dispatcher/internal/api"
 	"github.com/Carlos20052030/webhook-dispatcher/internal/config"
+	"github.com/Carlos20052030/webhook-dispatcher/internal/queue"
 	"github.com/Carlos20052030/webhook-dispatcher/internal/store"
+	"github.com/Carlos20052030/webhook-dispatcher/internal/worker"
 )
 
 func main() {
@@ -65,9 +68,31 @@ func run() error {
 	}
 	slog.Info("redis ok")
 
+	s := store.New(db)
+	q := queue.New(rdb)
+
+	var wg sync.WaitGroup
+
+	sched := worker.NewScheduler(db, q)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		sched.Run(ctx)
+	}()
+
+	wk := worker.NewWorker(s, q)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := wk.Run(ctx); err != nil {
+			slog.Error("worker stopped", "err", err)
+			stop()
+		}
+	}()
+
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           newRouter(db, rdb, cfg),
+		Handler:           newRouter(s, db, rdb, cfg),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -89,13 +114,13 @@ func run() error {
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	return srv.Shutdown(shutdownCtx)
+
+	srvErr := srv.Shutdown(shutdownCtx)
+	wg.Wait()
+	return srvErr
 }
 
-// newRouter wires the four public routes with their middlewares. Health
-// is open; /webhooks needs a user JWT; /events needs the ingest token.
-func newRouter(db *sql.DB, rdb *redis.Client, cfg *config.Config) http.Handler {
-	s := store.New(db)
+func newRouter(s *store.Store, db *sql.DB, rdb *redis.Client, cfg *config.Config) http.Handler {
 	wh := &api.WebhookHandler{Store: s}
 	ev := &api.EventHandler{Store: s}
 
