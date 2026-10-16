@@ -97,6 +97,13 @@ func run() error {
 		rec.Run(ctx)
 	}()
 
+	ret := worker.NewRetention(db)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ret.Run(ctx)
+	}()
+
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           newRouter(s, db, rdb, cfg),
