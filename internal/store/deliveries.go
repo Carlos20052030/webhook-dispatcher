@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -130,4 +132,119 @@ func nullableString(s string) any {
 		return nil
 	}
 	return s
+}
+
+// DeliveryFilter scopes ListDeliveries. Zero values mean "no filter".
+type DeliveryFilter struct {
+	EndpointID string
+	Status     string
+	EventType  string
+	From       *time.Time
+	To         *time.Time
+	Cursor     string // last ID from previous page
+	Limit      int    // 0 → 50, capped at 200
+}
+
+// Delivery is one row of the audit log. Payload and secret are omitted
+// on purpose — this is read-only metadata.
+type Delivery struct {
+	ID            string
+	EventID       string
+	EndpointID    string
+	EventType     string
+	Status        string
+	Attempts      int
+	NextAttemptAt *time.Time
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+// ListDeliveries returns a page of the user's deliveries, newest first.
+// Cursor pagination on UUIDv7 keeps the ordering stable and time-ordered.
+func (s *Store) ListDeliveries(ctx context.Context, userID string, f DeliveryFilter) ([]Delivery, error) {
+	var (
+		where []string
+		args  []any
+	)
+	args = append(args, userID)
+	where = append(where, fmt.Sprintf("user_id = $%d", len(args)))
+
+	if f.EndpointID != "" {
+		args = append(args, f.EndpointID)
+		where = append(where, fmt.Sprintf("endpoint_id = $%d", len(args)))
+	}
+	if f.Status != "" {
+		args = append(args, f.Status)
+		where = append(where, fmt.Sprintf("status = $%d", len(args)))
+	}
+	if f.EventType != "" {
+		args = append(args, f.EventType)
+		where = append(where, fmt.Sprintf("event_type = $%d", len(args)))
+	}
+	if f.From != nil {
+		args = append(args, *f.From)
+		where = append(where, fmt.Sprintf("created_at >= $%d", len(args)))
+	}
+	if f.To != nil {
+		args = append(args, *f.To)
+		where = append(where, fmt.Sprintf("created_at <= $%d", len(args)))
+	}
+	if f.Cursor != "" {
+		args = append(args, f.Cursor)
+		where = append(where, fmt.Sprintf("id < $%d", len(args)))
+	}
+
+	limit := effectiveLimit(f.Limit)
+	// Fetch one extra row to detect whether there is a next page.
+	args = append(args, limit+1)
+
+	query := `
+		SELECT id, event_id, endpoint_id, event_type, status, attempts,
+		       next_attempt_at, created_at, updated_at
+		  FROM deliveries
+		 WHERE ` + strings.Join(where, " AND ") + `
+		 ORDER BY id DESC
+		 LIMIT $` + strconv.Itoa(len(args))
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query deliveries: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []Delivery
+	for rows.Next() {
+		var (
+			d    Delivery
+			next sql.NullTime
+		)
+		if err := rows.Scan(&d.ID, &d.EventID, &d.EndpointID, &d.EventType,
+			&d.Status, &d.Attempts, &next, &d.CreatedAt, &d.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if next.Valid {
+			t := next.Time
+			d.NextAttemptAt = &t
+		}
+		out = append(out, d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Drop the sentinel row (used only to detect more pages).
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+func effectiveLimit(l int) int {
+	if l <= 0 {
+		return 50
+	}
+	if l > 200 {
+		return 200
+	}
+	return l
 }
