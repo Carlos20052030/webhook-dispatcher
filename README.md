@@ -5,7 +5,7 @@ An event-driven service that receives domain events from the
 delivers them to user-registered webhook endpoints with at-least-once
 semantics, retry with exponential backoff, and idempotent delivery.
 
-**Status:** under active development. Phase 2 of 4 (core HTTP).
+**Status:** under active development. Phase 3 of 4 (delivery).
 
 ## Stack
 
