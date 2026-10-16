@@ -90,6 +90,13 @@ func run() error {
 		}
 	}()
 
+	rec := worker.NewReclaimer(q, wk.ID)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		rec.Run(ctx)
+	}()
+
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           newRouter(s, db, rdb, cfg),

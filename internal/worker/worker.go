@@ -68,7 +68,13 @@ func (w *Worker) Run(ctx context.Context) error {
 			slog.Info("worker stopping", "consumer", w.ID)
 			return nil
 		}
-		msg, err := w.Queue.Consume(ctx, w.Stream, w.Group, w.ID, w.Block)
+
+		// Drain own PEL first — recovered messages via XAUTOCLAIM land
+		// here. Then fall back to new messages.
+		msg, err := w.Queue.ConsumeOwnPending(ctx, w.Stream, w.Group, w.ID)
+		if errors.Is(err, queue.ErrNoMessage) {
+			msg, err = w.Queue.Consume(ctx, w.Stream, w.Group, w.ID, w.Block)
+		}
 		if errors.Is(err, queue.ErrNoMessage) {
 			continue
 		}

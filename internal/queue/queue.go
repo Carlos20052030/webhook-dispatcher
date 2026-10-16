@@ -112,6 +112,28 @@ func (c *Client) ClaimStuck(ctx context.Context, stream, group, consumer string,
 	return out, nil
 }
 
+// ConsumeOwnPending reads the next message from this consumer's own PEL
+// (already delivered, never acked). Used to drain messages recovered by
+// XAUTOCLAIM before pulling new ones.
+func (c *Client) ConsumeOwnPending(ctx context.Context, stream, group, consumer string) (*Message, error) {
+	res, err := c.rdb.XReadGroup(ctx, &redis.XReadGroupArgs{
+		Group:    group,
+		Consumer: consumer,
+		Streams:  []string{stream, "0"},
+		Count:    1,
+	}).Result()
+	if errors.Is(err, redis.Nil) {
+		return nil, ErrNoMessage
+	}
+	if err != nil {
+		return nil, fmt.Errorf("xreadgroup pending: %w", err)
+	}
+	if len(res) == 0 || len(res[0].Messages) == 0 {
+		return nil, ErrNoMessage
+	}
+	return parseMessage(res[0].Messages[0])
+}
+
 func parseMessage(m redis.XMessage) (*Message, error) {
 	v, ok := m.Values["delivery_id"]
 	if !ok {
