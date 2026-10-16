@@ -15,6 +15,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/Carlos20052030/webhook-dispatcher/internal/api"
 	"github.com/Carlos20052030/webhook-dispatcher/internal/config"
 	"github.com/Carlos20052030/webhook-dispatcher/internal/store"
 )
@@ -64,12 +65,9 @@ func run() error {
 	}
 	slog.Info("redis ok")
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", healthz(db, rdb))
-
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           mux,
+		Handler:           newRouter(db, rdb, cfg),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -92,6 +90,29 @@ func run() error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return srv.Shutdown(shutdownCtx)
+}
+
+// newRouter wires the four public routes with their middlewares. Health
+// is open; /webhooks needs a user JWT; /events needs the ingest token.
+func newRouter(db *sql.DB, rdb *redis.Client, cfg *config.Config) http.Handler {
+	s := store.New(db)
+	wh := &api.WebhookHandler{Store: s}
+	ev := &api.EventHandler{Store: s}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", healthz(db, rdb))
+
+	mux.Handle("POST /webhooks",
+		api.RequireJWT(cfg.JWTSecret)(http.HandlerFunc(wh.Create)))
+	mux.Handle("GET /webhooks",
+		api.RequireJWT(cfg.JWTSecret)(http.HandlerFunc(wh.List)))
+	mux.Handle("DELETE /webhooks/{id}",
+		api.RequireJWT(cfg.JWTSecret)(http.HandlerFunc(wh.Delete)))
+
+	mux.Handle("POST /events",
+		api.RequireIngestToken(cfg.IngestToken)(http.HandlerFunc(ev.Ingest)))
+
+	return mux
 }
 
 func healthz(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
