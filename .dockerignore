@@ -1,0 +1,10 @@
+.git
+.gitignore
+.env
+.env.example
+*.md
+docs/
+_assets/
+*.pdf
+bin/
+tmp/

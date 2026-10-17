@@ -34,6 +34,25 @@ services:
       timeout: 3s
       retries: 10
 
+  dispatcher:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # Inside the compose network, use service names and internal ports.
+      DATABASE_URL: postgres://dispatcher:dispatcher@postgres:5432/webhook_dispatcher?sslmode=disable
+      REDIS_ADDR: redis:6379
+      HTTP_ADDR: ":8080"
+      LOG_LEVEL: info
+      # Secrets are injected from the local .env (not committed).
+      JWT_SECRET: ${JWT_SECRET}
+      INGEST_TOKEN: ${INGEST_TOKEN}
+    ports:
+      - "8080:8080"
+
 volumes:
   pgdata:
   redisdata:
