@@ -1,11 +1,10 @@
 # Deployment — Webhook Dispatcher
 
+How to deploy the dispatcher to production on a Linux VPS using Docker Compose.
+
 ## Overview
 
-The dispatcher runs on the same Hetzner VPS as the Bookmarks API and
-CloudMonitor. It uses Docker Compose and shares the host network with
-the Bookmarks API so they can communicate internally without exposing
-the dispatcher to the public internet.
+The dispatcher runs on the same Hetzner VPS as the Bookmarks API and CloudMonitor. Because the Bookmarks API already uses port 8080, the dispatcher is exposed on port **8082** externally to avoid port conflicts.
 
 ## Prerequisites
 
@@ -16,27 +15,41 @@ the dispatcher to the public internet.
 ## 1. Clone the repository
 
 ```bash
-git clone git@github.com:Carlos20052030/webhook-dispatcher.git
+cd ~
+git clone https://github.com/Carlos20052030/webhook-dispatcher.git
 cd webhook-dispatcher
 ```
 
 ## 2. Configure environment variables
 
-Copy the example file and fill in the real values:
+Copy the example file and fill in the real production values (from KeePassXC):
 
 ```bash
 cp .env.example .env
-nano .env
+vim .env
 ```
 
 Required variables for production:
-- `DATABASE_URL`: Postgres connection string
-- `REDIS_ADDR`: Redis address (usually `redis:6379` inside Docker)
-- `JWT_SECRET`: Must be identical to the Bookmarks API secret
-- `INGEST_TOKEN`: Must be identical to the Bookmarks API token
+- `DATABASE_URL`: Postgres connection string (inside Docker: `postgres:5432`)
+- `REDIS_ADDR`: Redis address (inside Docker: `redis:6379`)
+- `JWT_SECRET`: Must be identical to the Bookmarks API secret.
+- `INGEST_TOKEN`: Must be identical to the Bookmarks API token.
 - `HTTP_ADDR`: `:8080`
 
-## 3. Start the services
+## 3. Configure Docker Compose Port Mapping
+
+Because the Bookmarks API is already using port 8080 on the host, you must change the external port mapping for the dispatcher.
+
+Edit `docker-compose.yml` and change the `ports` section for the `dispatcher` service:
+
+```yaml
+  dispatcher:
+    # ...
+    ports:
+      - "8082:8080" # Maps host port 8082 to container port 8080
+```
+
+## 4. Start the services
 
 ```bash
 docker compose up -d --build
@@ -63,40 +76,41 @@ Expected output:
 {"msg":"worker started"}
 ```
 
-## 4. Integration with Bookmarks API
+*(Press `Ctrl+C` to exit the log viewer).*
 
-To allow the Bookmarks API to send events to the dispatcher, the
-`DISPATCHER_URL` variable in the Bookmarks API `.env` must point to the
-dispatcher container.
+## 5. Integration with Bookmarks API
 
-Since both run on the same host, the easiest way is to expose the
-dispatcher port on the host machine and configure the Bookmarks API to
-use the Docker bridge IP (usually `172.17.0.1`):
+To allow the Bookmarks API to send events to the dispatcher, the `DISPATCHER_URL` variable in the Bookmarks API `.env` must point to the dispatcher's external port.
+
+Since both run on the same host, use the Docker bridge gateway IP or the `host.docker.internal` alias, pointing to port **8082**:
 
 ```env
-# In bookmarks-api/.env
-DISPATCHER_URL=http://172.17.0.1:8080
+# In ~/bookmarks-api/.env
+DISPATCHER_URL=http://host.docker.internal:8082
 INGEST_TOKEN=<same-token-as-dispatcher>
 ```
 
-*Note: If both services are in the same Docker Compose network, use
-`http://dispatcher:8080` instead.*
+**Important Docker cache warning:** After changing the `.env` file, simply running `docker compose up -d` might not reload the new variables. You must force a recreate:
 
-## 5. Verification
+```bash
+cd ~/bookmarks-api
+docker compose down
+docker compose up -d
+```
 
-Create a bookmark and check the dispatcher logs:
+## 6. Verification (End-to-End)
+
+Create a bookmark in the Bookmarks API (running on port 8081) and check the dispatcher logs:
 
 ```bash
 # On the Bookmarks API
-curl -X POST http://localhost:8080/bookmarks \
-  -H "Authorization: Bearer <jwt>" \
+curl -i -X POST http://localhost:8081/bookmarks \
+  -H "Authorization: Bearer <your-jwt-token>" \
   -H "Content-Type: application/json" \
-  -d '{"url":"https://example.com","title":"Test"}'
+  -d '{"url":"https://example.com","title":"Production Test"}'
 ```
 
-The dispatcher should log `scheduler dispatched count=1`. If the target
-webhook is reachable, the delivery will be marked `succeeded` in the
-`deliveries` table.
+The dispatcher should log `scheduler dispatched count=1`. If the target webhook is reachable, the delivery will be marked `succeeded` in the `deliveries` table.
 
 ## Rollback
 
@@ -105,4 +119,5 @@ If a deployment goes wrong:
 ```bash
 git checkout <previous-commit>
 docker compose up -d --build
+```
 ```

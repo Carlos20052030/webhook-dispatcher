@@ -347,4 +347,4 @@ CREATE TABLE seen_events (
 
 ## Version
 
-V1
+V1.0 — Deployed to production (18/10/2026).
