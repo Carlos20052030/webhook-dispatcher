@@ -1,14 +1,3 @@
-**Sim, substitua o conteúdo inteiro.**
-
-O seu README atual é o que eu chamo de "Diário de Bordo de Desenvolvedor". Ele diz *"Fase 3 de 4"*, tem links com *"TBD"* (To Be Done) e foca no que você está construindo.
-
-O novo README é uma **"Página de Produto"**. Ele não fala sobre fases de desenvolvimento, ele fala sobre o **Problema** que resolve, as **Features** que tem e como a **Arquitetura** funciona. É isso que um recrutador (ou um cliente em potencial) quer ver. Eles querem saber se a ferramenta funciona e é confiável.
-
-*(Inclusive, como o projeto está em produção agora, aquele "Phase 3 of 4" já estava desatualizado. O projeto está na v1.0.0).*
-
-Aqui está o arquivo completo para você **apagar tudo e colar** no seu `README.md`:
-
-```markdown
 # Webhook Dispatcher
 
 **An event-driven, fault-tolerant webhook delivery service built with Go and Redis Streams.**
@@ -17,7 +6,7 @@ Aqui está o arquivo completo para você **apagar tudo e colar** no seu `README.
 
 Sending webhooks reliably is hard. When a user's server is down, you need retries with exponential backoff. If your system crashes, you need to ensure messages aren't lost. And if you send the same event twice, the receiver needs to know it's a duplicate.
 
-This project solves that. It acts as a middleman between your application (like a REST API) and your users' webhook endpoints, ensuring at-least-once delivery.
+This project solves that. It acts as a middleman between your application (like the Nuntix Bookmarks API) and your users' webhook endpoints, ensuring at-least-once delivery.
 
 ## Features
 
@@ -32,30 +21,44 @@ This project solves that. It acts as a middleman between your application (like 
 
 The system follows a Fire-and-Forget ingestion pattern. The API receives an event, saves it to PostgreSQL (source of truth), and a background scheduler pushes it to a Redis Stream. Workers consume the stream, execute the HTTP POST with HMAC signing, and handle retries.
 
+*(Note: The Dispatcher shares the PostgreSQL container with the Bookmarks API, utilizing a separate logical database named `webhook_dispatcher`).*
+
 ```text
-[Client API] -> (Fire and Forget) -> [Postgres]
-                                        |
-                                   [Scheduler]
-                                        |
-                                        v
+[Client API] -> (Fire and Forget) -> [Shared Postgres]
+                                          |
+                                     [Scheduler]
+                                          |
+                                          v
 [Target Webhook] <- (HMAC POST) <- [Worker] <- [Redis Stream]
 ```
 
 ## Stack
 
-- Go 1.27 (no frameworks, standard library `net/http`)
-- PostgreSQL 17 (state & retry queue)
-- Redis 7 (transport & consumer groups)
-- Docker & Docker Compose
+- **Language:** Go 1.27 (no frameworks, standard library `net/http`)
+- **Database:** PostgreSQL 17 (shared container with Bookmarks API)
+- **Transport:** Redis 7 (AOF enabled, consumer groups)
+- **Deployment:** Docker & Docker Compose (connected to the `bookmarks-api_default` network)
 
-## Local development
+## Local Development
 
-```bash
-cp .env.example .env       # fill in JWT_SECRET and INGEST_TOKEN
-docker compose up -d       # Postgres 17, Redis 7 (AOF)
-go run ./cmd/dispatcher
-curl http://localhost:8080/healthz
-```
+Because the database is shared, ensure the `bookmarks-api` stack is running (or start a standalone Postgres on port 5432).
+
+1. Configure the environment:
+   ```bash
+   cp .env.example .env
+   # Fill in DATABASE_URL (pointing to the Bookmarks Postgres), JWT_SECRET, INGEST_TOKEN, REDIS_ADDR
+   ```
+
+2. Start the local Redis and the Dispatcher:
+   ```bash
+   docker compose up -d redis
+   go run ./cmd/dispatcher
+   ```
+
+3. Verify it's running:
+   ```bash
+   curl http://localhost:8080/healthz
+   ```
 
 ## Testing
 

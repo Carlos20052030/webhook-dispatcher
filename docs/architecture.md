@@ -2,10 +2,12 @@
 
 ## Overview
 
-Event-driven service that receives domain events from the Bookmarks API
+Event-driven service that receives domain events from the Nuntix Bookmarks API
 and delivers them to user-registered webhook endpoints. At-least-once
 delivery with exponential backoff, idempotency via stable delivery IDs,
 and dead-letter after max attempts.
+
+**Physical deployment:** The Dispatcher runs alongside the Bookmarks API and the Nuntix Proxy. To save resources, it does not run its own Postgres container; instead, it connects to a logical database named `webhook_dispatcher` inside the `bookmarks-api-db-1` container. Redis runs in a dedicated container (`webhook-dispatcher-redis-1`).
 
 Postgres is the source of truth. Redis Streams is transport only.
 
@@ -14,12 +16,13 @@ Postgres is the source of truth. Redis Streams is transport only.
 ```
                  +------------------+
    Bookmarks --->| POST /events     |
-                 | (ingest token)   |
+   API           | (ingest token)   |
                  +--------+---------+
                           | tx: seen_events + deliveries(pending)
                           v
                  +------------------+
-                 | Postgres         |
+                 | Shared Postgres  |
+                 | (webhook_dispatcher DB)
                  | seen_events      |
                  | deliveries       |<--+
                  | delivery_attempts|   |
@@ -163,3 +166,11 @@ Full schema is in `migrations/001_init.sql`. Key points:
 | Target 5xx forever | attempts >= 10 | Marked `dead`, queryable via `GET /deliveries` |
 | Duplicate ingestion | `seen_events` conflict | 200 duplicate, no new deliveries |
 | Scheduler fails post-XADD | `UPDATE` after `XADD` throws | Row stays pending, next tick re-XADDs; worker accepts `pending|queued` |
+
+## Nuntix Ecosystem Integration (V1.1)
+
+- **Shared Database:** The Dispatcher shares the Postgres container (`bookmarks-api-db-1`) with the Bookmarks API, using a dedicated logical database named `webhook_dispatcher`. This reduces memory footprint and simplifies backups.
+- **Network:** The Dispatcher runs on the `bookmarks-api_default` Docker network. The Redis container is on the same network.
+- **Ingestion:** The Bookmarks API sends events to `http://webhook-dispatcher-dispatcher-1:8080/events` using the `INGEST_TOKEN`.
+- **Frontend:** The Nuntix UI (React) manages webhooks via the Proxy, which routes `/deliveries` and `/webhooks` requests to this service.
+```

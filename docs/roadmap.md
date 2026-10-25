@@ -1,8 +1,8 @@
 # Roadmap — Webhook Dispatcher
 
-> **Status:** V1.0 is complete and live in production.
+> **Status:** V1.0 is complete and live in production. V1.1 (Nuntix Integration) is complete.
 
-This document records the delivery of V1 and outlines the roadmap for future product versions.
+This document records the delivery of V1, the integration into the Nuntix ecosystem, and outlines the roadmap for future product versions.
 
 ## V1 — Completed
 
@@ -31,7 +31,7 @@ This document records the delivery of V1 and outlines the roadmap for future pro
 - [x] Exponential backoff with jitter.
 - [x] Reclaimer for crashed workers.
 
-### Phase 4 — Integration & Production (~4 days) ✅
+### Phase 4 — Production (~4 days) ✅
 **Deliverable:** Bookmarks API publishing, dispatcher running on the VPS, `GET /deliveries` auditable.
 - [x] `GET /deliveries` with cursor pagination.
 - [x] Fire-and-forget client in the Bookmarks API.
@@ -41,9 +41,28 @@ This document records the delivery of V1 and outlines the roadmap for future pro
 
 ---
 
+## V1.1 — Nuntix Ecosystem Integration (Current)
+
+**Goal:** Consolidate infrastructure to save resources and integrate with the Nuntix Gateway for a unified frontend experience.
+
+### Infrastructure & Architecture
+- [x] **Database Consolidation:** Removed the dedicated Postgres container. The Dispatcher now uses the logical database `webhook_dispatcher` inside the `bookmarks-api-db-1` container.
+- [x] **Network Integration:** Joined the `bookmarks-api_default` Docker network.
+- [x] **Port Remapping:** Moved to `127.0.0.1:8082` to prevent public exposure (Zero Trust).
+
+### Security & Auth
+- [x] **Strict Port Binding:** Mapped all ports (Postgres, Redis, Dispatcher) to `127.0.0.1` after the Hetzner Abuse Report.
+- [x] **API Keys Ready:** The Dispatcher's endpoints are now ready to be consumed by external tools using the API Keys generated in the Bookmarks API (Machine-to-Machine auth).
+
+### Frontend Integration (Upcoming)
+- [ ] **React UI:** Create a `Webhooks.tsx` page in the Nuntix Dashboard to allow users to register new webhook endpoints.
+- [ ] **Audit UI:** Create a `Deliveries.tsx` page in the Nuntix Dashboard to visualize the delivery attempts, failures, and dead letters.
+
+---
+
 ## V2 — Product Vision (Future Work)
 
-The goal for V2 is to evolve the Dispatcher from an internal service to a multi-tenant SaaS product.
+The goal for V2 is to evolve the Dispatcher from an internal service to a multi-tenant SaaS product, fully manageable via the Nuntix UI.
 
 ### Phase 5 — Multi-Tenant Core
 - [ ] Tenant provisioning API (create/delete tenants, issue specific API keys).
@@ -52,7 +71,7 @@ The goal for V2 is to evolve the Dispatcher from an internal service to a multi-
 
 ### Phase 6 — Observability & Dashboard
 - [ ] Prometheus metrics (`/metrics` endpoint).
-- [ ] Web dashboard for users to view delivery logs and replay failed events.
+- [ ] Web dashboard for users to view delivery logs and replay failed events (integrated into Nuntix).
 - [ ] Alerting (email/Slack) when a tenant's endpoint is consistently failing.
 
 ### Phase 7 — Commercial Features
