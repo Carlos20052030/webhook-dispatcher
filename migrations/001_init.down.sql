@@ -1,0 +1,1 @@
+DROP TABLE IF EXISTS delivery_attempts, deliveries, endpoint_subscriptions, endpoints, seen_events, schema_migrations CASCADE;

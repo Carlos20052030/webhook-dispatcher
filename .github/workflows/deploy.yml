@@ -6,8 +6,46 @@ on:
       - main
 
 jobs:
-  deploy:
+  test:
+    name: Test
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+      - name: Run tests
+        run: go test ./...
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+
+  gosec:
+    name: Security Scan (gosec)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+      - uses: securego/gosec@master
+        with:
+          args: '-confidence=high -severity=critical ./...'
+
+  deploy:
+    name: Deploy to VPS
+    needs: [test, lint, gosec]
+    runs-on: ubuntu-latest
+    if: success()
     steps:
       - name: Deploy to VPS via SSH
         uses: appleboy/ssh-action@v1.0.3
