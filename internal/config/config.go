@@ -8,12 +8,13 @@ import (
 )
 
 type Config struct {
-	HTTPAddr    string
-	DatabaseURL string
-	RedisAddr   string
-	JWTSecret   []byte
-	IngestToken []byte
-	LogLevel    slog.Level
+	HTTPAddr       string
+	DatabaseURL    string
+	RedisAddr      string
+	JWTSecret      []byte
+	IngestToken    []byte
+	LogLevel       slog.Level
+	AllowedOrigins string
 }
 
 // Load reads env vars and fails fast on anything missing or malformed.
@@ -25,12 +26,13 @@ func Load() (*Config, error) {
 	}
 
 	cfg := &Config{
-		HTTPAddr:    getEnv("HTTP_ADDR", ":8080"),
-		DatabaseURL: os.Getenv("DATABASE_URL"),
-		RedisAddr:   os.Getenv("REDIS_ADDR"),
-		JWTSecret:   []byte(os.Getenv("JWT_SECRET")),
-		IngestToken: []byte(os.Getenv("INGEST_TOKEN")),
-		LogLevel:    level,
+		HTTPAddr:       getEnv("HTTP_ADDR", ":8080"),
+		DatabaseURL:    os.Getenv("DATABASE_URL"),
+		RedisAddr:      os.Getenv("REDIS_ADDR"),
+		JWTSecret:      []byte(os.Getenv("JWT_SECRET")),
+		IngestToken:    []byte(os.Getenv("INGEST_TOKEN")),
+		LogLevel:       level,
+		AllowedOrigins: getEnv("ALLOWED_ORIGINS", "https://nuntix.com.br"),
 	}
 
 	if err := cfg.validate(); err != nil {
