@@ -2,10 +2,11 @@ package worker
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Carlos20052030/webhook-dispatcher/internal/queue"
 )
@@ -14,14 +15,14 @@ import (
 // It is the only component that publishes to the stream — workers only
 // consume. Postgres remains the source of truth.
 type Scheduler struct {
-	DB        *sql.DB
+	DB        *pgxpool.Pool
 	Queue     *queue.Client
 	Stream    string
 	Tick      time.Duration
 	BatchSize int
 }
 
-func NewScheduler(db *sql.DB, q *queue.Client) *Scheduler {
+func NewScheduler(db *pgxpool.Pool, q *queue.Client) *Scheduler {
 	return &Scheduler{
 		DB:        db,
 		Queue:     q,
@@ -54,13 +55,13 @@ func (s *Scheduler) Run(ctx context.Context) {
 // tick processes at most BatchSize due rows and returns how many were
 // successfully enqueued.
 func (s *Scheduler) tick(ctx context.Context) (int, error) {
-	tx, err := s.DB.BeginTx(ctx, nil)
+	tx, err := s.DB.Begin(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("begin tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() { _ = tx.Rollback(ctx) }()
 
-	rows, err := tx.QueryContext(ctx, `
+	rows, err := tx.Query(ctx, `
 		SELECT id FROM deliveries
 		 WHERE status = 'pending'
 		   AND next_attempt_at IS NOT NULL
@@ -75,19 +76,19 @@ func (s *Scheduler) tick(ctx context.Context) (int, error) {
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			_ = rows.Close()
+			rows.Close()
 			return 0, err
 		}
 		ids = append(ids, id)
 	}
 	if err := rows.Err(); err != nil {
-		_ = rows.Close()
+		rows.Close()
 		return 0, err
 	}
-	_ = rows.Close()
+	rows.Close()
 
 	if len(ids) == 0 {
-		return 0, tx.Commit()
+		return 0, tx.Commit(ctx)
 	}
 
 	// Clear next_attempt_at so a re-tick does not pick these rows again
@@ -102,7 +103,7 @@ func (s *Scheduler) tick(ctx context.Context) (int, error) {
 			// Leave the whole batch unmarked; next tick retries.
 			return enqueued, fmt.Errorf("publish %s: %w", id, err)
 		}
-		if _, err := tx.ExecContext(ctx,
+		if _, err := tx.Exec(ctx,
 			`UPDATE deliveries SET status = 'queued', updated_at = now()
 			 WHERE id = $1`, id,
 		); err != nil {
@@ -111,7 +112,7 @@ func (s *Scheduler) tick(ctx context.Context) (int, error) {
 		enqueued++
 	}
 
-	if err := tx.Commit(); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		return enqueued, fmt.Errorf("commit: %w", err)
 	}
 	return enqueued, nil

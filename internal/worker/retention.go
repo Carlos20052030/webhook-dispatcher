@@ -2,9 +2,10 @@ package worker
 
 import (
 	"context"
-	"database/sql"
 	"log/slog"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Retention prunes old rows on a nightly schedule. delivery_attempts
@@ -12,14 +13,14 @@ import (
 // status is 'dead' — dead rows are the audit trail and never expire
 // automatically.
 type Retention struct {
-	DB           *sql.DB
+	DB           *pgxpool.Pool
 	AttemptDays  int
 	DeliveryDays int
 	RunAt        string // "HH:MM" in UTC, e.g. "03:00"
 	Tick         time.Duration
 }
 
-func NewRetention(db *sql.DB) *Retention {
+func NewRetention(db *pgxpool.Pool) *Retention {
 	return &Retention{
 		DB:           db,
 		AttemptDays:  30,
@@ -56,20 +57,20 @@ func (r *Retention) prune(ctx context.Context) error {
 	attemptsCutoff := time.Now().UTC().AddDate(0, 0, -r.AttemptDays)
 	deliveriesCutoff := time.Now().UTC().AddDate(0, 0, -r.DeliveryDays)
 
-	resA, err := r.DB.ExecContext(ctx,
+	resA, err := r.DB.Exec(ctx,
 		`DELETE FROM delivery_attempts WHERE finished_at < $1`, attemptsCutoff)
 	if err != nil {
 		return err
 	}
-	nA, _ := resA.RowsAffected()
+	nA := resA.RowsAffected()
 
-	resD, err := r.DB.ExecContext(ctx,
+	resD, err := r.DB.Exec(ctx,
 		`DELETE FROM deliveries
 		  WHERE status <> 'dead' AND updated_at < $1`, deliveriesCutoff)
 	if err != nil {
 		return err
 	}
-	nD, _ := resD.RowsAffected()
+	nD := resD.RowsAffected()
 
 	slog.Info("retention pruned",
 		"attempts", nA, "deliveries", nD)

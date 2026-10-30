@@ -2,33 +2,32 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"os"
 	"testing"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Opens a real Postgres. Skips unless TEST_DATABASE_URL is set, so plain
 // `go test ./...` stays hermetic. The URL must point to a throwaway DB.
-func openTestDB(t *testing.T) *sql.DB {
+func openTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("TEST_DATABASE_URL not set; skipping DB-backed test")
 	}
-	db, err := sql.Open("pgx", dsn)
+	pool, err := pgxpool.New(context.Background(), dsn)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	t.Cleanup(func() { _ = db.Close() })
-	return db
+	t.Cleanup(func() { pool.Close() })
+	return pool
 }
 
-func resetSchema(t *testing.T, db *sql.DB) {
+func resetSchema(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	// Drop everything the migration creates, plus the version table.
-	_, err := db.Exec(`
+	_, err := pool.Exec(context.Background(), `
 		DROP TABLE IF EXISTS delivery_attempts, deliveries,
 		                     endpoint_subscriptions, endpoints,
 		                     seen_events, schema_migrations CASCADE;
@@ -38,17 +37,27 @@ func resetSchema(t *testing.T, db *sql.DB) {
 	}
 }
 
+func newTestStore(t *testing.T) *Store {
+	t.Helper()
+	pool := openTestPool(t)
+	resetSchema(t, pool)
+	if err := Migrate(context.Background(), pool); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	return New(pool)
+}
+
 func TestMigrate_AppliesAndIsIdempotent(t *testing.T) {
-	db := openTestDB(t)
-	resetSchema(t, db)
+	pool := openTestPool(t)
+	resetSchema(t, pool)
 	ctx := context.Background()
 
-	if err := Migrate(ctx, db); err != nil {
+	if err := Migrate(ctx, pool); err != nil {
 		t.Fatalf("first Migrate: %v", err)
 	}
 
 	var count int
-	if err := db.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("count schema_migrations: %v", err)
 	}
 	if count != 1 {
@@ -56,10 +65,10 @@ func TestMigrate_AppliesAndIsIdempotent(t *testing.T) {
 	}
 
 	// Second run must be a no-op, not an error.
-	if err := Migrate(ctx, db); err != nil {
+	if err := Migrate(ctx, pool); err != nil {
 		t.Fatalf("second Migrate: %v", err)
 	}
-	if err := db.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("count schema_migrations (2): %v", err)
 	}
 	if count != 1 {
@@ -72,7 +81,7 @@ func TestMigrate_AppliesAndIsIdempotent(t *testing.T) {
 		"delivery_attempts", "seen_events",
 	} {
 		var exists bool
-		err := db.QueryRow(`
+		err := pool.QueryRow(ctx, `
 			SELECT EXISTS (
 				SELECT 1 FROM information_schema.tables
 				WHERE table_schema = 'public' AND table_name = $1

@@ -24,7 +24,7 @@ func seedDelivery(t *testing.T, s *Store, user, eventID, deliveryID string) {
 		t.Fatalf("ingest: %v", err)
 	}
 	// Ingest creates the delivery with its own id. Overwrite to control.
-	if _, err := s.db.ExecContext(ctx,
+	if _, err := s.pool.Exec(ctx,
 		`UPDATE deliveries SET id = $1 WHERE event_id = $2`, deliveryID, eventID,
 	); err != nil {
 		t.Fatalf("rewrite delivery id: %v", err)
@@ -83,7 +83,7 @@ func TestMarkSucceeded(t *testing.T) {
 	}
 
 	var status string
-	if err := s.db.QueryRowContext(ctx,
+	if err := s.pool.QueryRow(ctx,
 		`SELECT status FROM deliveries WHERE id = $1`,
 		"cccccccc-2222-2222-2222-222222222222").Scan(&status); err != nil {
 		t.Fatal(err)
@@ -115,7 +115,7 @@ func TestRecordAttempt(t *testing.T) {
 	}
 
 	var n int
-	if err := s.db.QueryRowContext(ctx,
+	if err := s.pool.QueryRow(ctx,
 		`SELECT count(*) FROM delivery_attempts WHERE delivery_id = $1`,
 		"cccccccc-3333-3333-3333-333333333333").Scan(&n); err != nil {
 		t.Fatal(err)

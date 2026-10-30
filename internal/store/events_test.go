@@ -48,7 +48,7 @@ func TestIngestEvent_CreatesDeliveryPerSubscribedEndpoint(t *testing.T) {
 	}
 
 	var count int
-	if err := s.db.QueryRowContext(ctx,
+	if err := s.pool.QueryRow(ctx,
 		`SELECT count(*) FROM deliveries WHERE event_id = $1`,
 		"aaaaaaaa-0000-0000-0000-000000000001").Scan(&count); err != nil {
 		t.Fatal(err)
@@ -79,7 +79,7 @@ func TestIngestEvent_DuplicateReturnsErrDuplicate(t *testing.T) {
 	}
 
 	var count int
-	if err := s.db.QueryRowContext(ctx,
+	if err := s.pool.QueryRow(ctx,
 		`SELECT count(*) FROM deliveries WHERE event_id = $1`, ev.ID).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestIngestEvent_NoSubscribersStillRecorded(t *testing.T) {
 	}
 
 	var count int
-	if err := s.db.QueryRowContext(ctx,
+	if err := s.pool.QueryRow(ctx,
 		`SELECT count(*) FROM seen_events WHERE event_id = $1`,
 		"aaaaaaaa-0000-0000-0000-000000000003").Scan(&count); err != nil {
 		t.Fatal(err)

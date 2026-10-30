@@ -7,16 +7,6 @@ import (
 	"time"
 )
 
-func newTestStore(t *testing.T) *Store {
-	t.Helper()
-	db := openTestDB(t)
-	resetSchema(t, db)
-	if err := Migrate(context.Background(), db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	return New(db)
-}
-
 func sampleEndpoint(id, userID string) *Endpoint {
 	return &Endpoint{
 		ID:            id,
@@ -141,7 +131,7 @@ func TestDeleteEndpoint_HappyPath(t *testing.T) {
 	}
 
 	var n int
-	if err := s.db.QueryRowContext(ctx,
+	if err := s.pool.QueryRow(ctx,
 		`SELECT count(*) FROM endpoint_subscriptions WHERE endpoint_id = $1`,
 		e.ID).Scan(&n); err != nil {
 		t.Fatalf("count subscriptions: %v", err)

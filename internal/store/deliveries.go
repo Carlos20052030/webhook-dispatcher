@@ -2,13 +2,15 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // DeliveryJob is everything the worker needs to attempt one delivery.
@@ -30,7 +32,7 @@ type DeliveryJob struct {
 func (s *Store) GetDeliveryForWork(ctx context.Context, deliveryID string) (*DeliveryJob, error) {
 	var j DeliveryJob
 	var payload []byte
-	err := s.db.QueryRowContext(ctx, `
+	err := s.pool.QueryRow(ctx, `
 		SELECT d.id, d.event_id, d.endpoint_id, d.user_id, d.event_type,
 		       d.payload, d.attempts,
 		       e.url, e.secret
@@ -39,7 +41,7 @@ func (s *Store) GetDeliveryForWork(ctx context.Context, deliveryID string) (*Del
 		 WHERE d.id = $1`, deliveryID).
 		Scan(&j.DeliveryID, &j.EventID, &j.EndpointID, &j.UserID, &j.EventType,
 			&payload, &j.Attempts, &j.TargetURL, &j.Secret)
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
@@ -55,7 +57,7 @@ func (s *Store) GetDeliveryForWork(ctx context.Context, deliveryID string) (*Del
 // already claimed by another worker). The caller must XACK and skip.
 func (s *Store) MarkInFlight(ctx context.Context, deliveryID string) (int, bool, error) {
 	var attempts int
-	err := s.db.QueryRowContext(ctx, `
+	err := s.pool.QueryRow(ctx, `
 		UPDATE deliveries
 		   SET status = 'in_flight',
 		       attempts = attempts + 1,
@@ -63,7 +65,7 @@ func (s *Store) MarkInFlight(ctx context.Context, deliveryID string) (int, bool,
 		 WHERE id = $1
 		   AND status IN ('pending', 'queued')
 		 RETURNING attempts`, deliveryID).Scan(&attempts)
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, false, nil
 	}
 	if err != nil {
@@ -84,7 +86,7 @@ type Attempt struct {
 }
 
 func (s *Store) RecordAttempt(ctx context.Context, a Attempt) error {
-	_, err := s.db.ExecContext(ctx, `
+	_, err := s.pool.Exec(ctx, `
 		INSERT INTO delivery_attempts (
 			delivery_id, attempt_number, started_at, finished_at,
 			status_code, error, duration_ms
@@ -98,14 +100,14 @@ func (s *Store) RecordAttempt(ctx context.Context, a Attempt) error {
 }
 
 func (s *Store) MarkSucceeded(ctx context.Context, deliveryID string) error {
-	_, err := s.db.ExecContext(ctx, `
+	_, err := s.pool.Exec(ctx, `
 		UPDATE deliveries SET status = 'succeeded', updated_at = now()
 		 WHERE id = $1`, deliveryID)
 	return err
 }
 
 func (s *Store) MarkPendingRetry(ctx context.Context, deliveryID string, nextAttemptAt time.Time) error {
-	_, err := s.db.ExecContext(ctx, `
+	_, err := s.pool.Exec(ctx, `
 		UPDATE deliveries
 		   SET status = 'pending', next_attempt_at = $2, updated_at = now()
 		 WHERE id = $1`, deliveryID, nextAttemptAt)
@@ -113,13 +115,13 @@ func (s *Store) MarkPendingRetry(ctx context.Context, deliveryID string, nextAtt
 }
 
 func (s *Store) MarkDead(ctx context.Context, deliveryID string) error {
-	_, err := s.db.ExecContext(ctx, `
+	_, err := s.pool.Exec(ctx, `
 		UPDATE deliveries SET status = 'dead', updated_at = now()
 		 WHERE id = $1`, deliveryID)
 	return err
 }
 
-// nullableInt and nullableString build sql.Null for optional columns.
+// nullableInt and nullableString build pgtype for optional columns.
 func nullableInt(v int) any {
 	if v == 0 {
 		return nil
@@ -206,17 +208,17 @@ func (s *Store) ListDeliveries(ctx context.Context, userID string, f DeliveryFil
 		 ORDER BY id DESC
 		 LIMIT $` + strconv.Itoa(len(args))
 
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query deliveries: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer rows.Close()
 
 	var out []Delivery
 	for rows.Next() {
 		var (
 			d    Delivery
-			next sql.NullTime
+			next pgtype.Timestamptz
 		)
 		if err := rows.Scan(&d.ID, &d.EventID, &d.EndpointID, &d.EventType,
 			&d.Status, &d.Attempts, &next, &d.CreatedAt, &d.UpdatedAt); err != nil {

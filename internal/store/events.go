@@ -26,27 +26,24 @@ type EventToIngest struct {
 // delivery per subscribed endpoint. Atomic: either everything lands or
 // nothing does. Returns the number of deliveries created, or ErrDuplicate.
 func (s *Store) IngestEvent(ctx context.Context, ev EventToIngest) (int, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.BeginTx(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("begin tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() { _ = tx.Rollback(ctx) }()
 
-	res, err := tx.ExecContext(ctx,
+	res, err := tx.Exec(ctx,
 		`INSERT INTO seen_events (event_id) VALUES ($1) ON CONFLICT DO NOTHING`,
 		ev.ID)
 	if err != nil {
 		return 0, fmt.Errorf("insert seen_events: %w", err)
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return 0, err
-	}
+	n := res.RowsAffected()
 	if n == 0 {
 		return 0, ErrDuplicate
 	}
 
-	rows, err := tx.QueryContext(ctx, `
+	rows, err := tx.Query(ctx, `
 		SELECT e.id
 		FROM endpoints e
 		JOIN endpoint_subscriptions es ON es.endpoint_id = e.id
@@ -62,23 +59,23 @@ func (s *Store) IngestEvent(ctx context.Context, ev EventToIngest) (int, error) 
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			_ = rows.Close()
+			rows.Close()
 			return 0, err
 		}
 		endpointIDs = append(endpointIDs, id)
 	}
 	if err := rows.Err(); err != nil {
-		_ = rows.Close()
+		rows.Close()
 		return 0, err
 	}
-	_ = rows.Close()
+	rows.Close()
 
 	for _, epID := range endpointIDs {
 		deliveryID, err := idgen.UUIDv7()
 		if err != nil {
 			return 0, fmt.Errorf("gen delivery id: %w", err)
 		}
-		if _, err := tx.ExecContext(ctx, `
+		if _, err := tx.Exec(ctx, `
 			INSERT INTO deliveries (
 				id, event_id, endpoint_id, user_id, event_type, payload,
 				status, attempts, next_attempt_at
@@ -89,7 +86,7 @@ func (s *Store) IngestEvent(ctx context.Context, ev EventToIngest) (int, error) 
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		return 0, fmt.Errorf("commit: %w", err)
 	}
 	return len(endpointIDs), nil

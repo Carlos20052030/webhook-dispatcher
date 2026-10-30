@@ -22,13 +22,13 @@ type Endpoint struct {
 // CreateEndpoint inserts the endpoint and its subscriptions atomically.
 // A partial insert would leave a webhook that never fires.
 func (s *Store) CreateEndpoint(ctx context.Context, e *Endpoint) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.BeginTx(ctx)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() { _ = tx.Rollback(ctx) }()
 
-	_, err = tx.ExecContext(ctx, `
+	_, err = tx.Exec(ctx, `
 		INSERT INTO endpoints (id, user_id, url, secret, active, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6)`,
 		e.ID, e.UserID, e.URL, e.Secret, e.Active, e.CreatedAt)
@@ -37,7 +37,7 @@ func (s *Store) CreateEndpoint(ctx context.Context, e *Endpoint) error {
 	}
 
 	for _, evt := range e.Subscriptions {
-		if _, err := tx.ExecContext(ctx,
+		if _, err := tx.Exec(ctx,
 			`INSERT INTO endpoint_subscriptions (endpoint_id, event_type)
 			 VALUES ($1, $2)`, e.ID, evt,
 		); err != nil {
@@ -45,13 +45,13 @@ func (s *Store) CreateEndpoint(ctx context.Context, e *Endpoint) error {
 		}
 	}
 
-	return tx.Commit()
+	return tx.Commit(ctx)
 }
 
 // ListEndpointsByUser hydrates subscriptions in one query. Secret is
 // returned: the API layer decides when to expose it.
 func (s *Store) ListEndpointsByUser(ctx context.Context, userID string) ([]Endpoint, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.pool.Query(ctx, `
 		SELECT e.id, e.user_id, e.url, e.secret, e.active, e.created_at,
 		       COALESCE(
 		         array_agg(es.event_type) FILTER (WHERE es.event_type IS NOT NULL),
@@ -65,7 +65,7 @@ func (s *Store) ListEndpointsByUser(ctx context.Context, userID string) ([]Endpo
 	if err != nil {
 		return nil, fmt.Errorf("query endpoints: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer rows.Close()
 
 	var out []Endpoint
 	for rows.Next() {
@@ -83,15 +83,12 @@ func (s *Store) ListEndpointsByUser(ctx context.Context, userID string) ([]Endpo
 // the row is missing OR owned by another user, so the handler can 404 both
 // without leaking ownership.
 func (s *Store) DeleteEndpoint(ctx context.Context, userID, id string) error {
-	res, err := s.db.ExecContext(ctx,
+	res, err := s.pool.Exec(ctx,
 		`DELETE FROM endpoints WHERE id = $1 AND user_id = $2`, id, userID)
 	if err != nil {
 		return fmt.Errorf("delete endpoint: %w", err)
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
+	n := res.RowsAffected()
 	if n == 0 {
 		return ErrNotFound
 	}

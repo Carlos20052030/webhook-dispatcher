@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -14,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/Carlos20052030/webhook-dispatcher/internal/api"
@@ -45,18 +44,18 @@ func run() error {
 		os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	db, err := sql.Open("pgx", cfg.DatabaseURL)
+	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
 	if err != nil {
-		return fmt.Errorf("open database/sql: %w", err)
+		return fmt.Errorf("create pgxpool: %w", err)
 	}
-	defer func() { _ = db.Close() }()
+	defer pool.Close()
 
-	if err := db.PingContext(ctx); err != nil {
+	if err := pool.Ping(ctx); err != nil {
 		return fmt.Errorf("ping postgres: %w", err)
 	}
 	slog.Info("postgres ok")
 
-	if err := store.Migrate(ctx, db); err != nil {
+	if err := store.Migrate(ctx, pool); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
 	slog.Info("migrations applied")
@@ -69,12 +68,12 @@ func run() error {
 	}
 	slog.Info("redis ok")
 
-	s := store.New(db)
+	s := store.New(pool)
 	q := queue.New(rdb)
 
 	var wg sync.WaitGroup
 
-	sched := worker.NewScheduler(db, q)
+	sched := worker.NewScheduler(pool, q)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -98,7 +97,7 @@ func run() error {
 		rec.Run(ctx)
 	}()
 
-	ret := worker.NewRetention(db)
+	ret := worker.NewRetention(pool)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -107,7 +106,7 @@ func run() error {
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           newRouter(s, db, rdb, cfg),
+		Handler:           newRouter(s, pool, rdb, cfg),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -135,13 +134,13 @@ func run() error {
 	return srvErr
 }
 
-func newRouter(s *store.Store, db *sql.DB, rdb *redis.Client, cfg *config.Config) http.Handler {
+func newRouter(s *store.Store, pool *pgxpool.Pool, rdb *redis.Client, cfg *config.Config) http.Handler {
 	wh := &api.WebhookHandler{Store: s}
 	ev := &api.EventHandler{Store: s}
 	dh := &api.DeliveryHandler{Store: s}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", healthz(db, rdb))
+	mux.HandleFunc("GET /healthz", healthz(pool, rdb))
 
 	mux.Handle("POST /webhooks",
 		api.RequireJWT(cfg.JWTSecret)(http.HandlerFunc(wh.Create)))
@@ -189,12 +188,12 @@ func corsMiddleware(next http.Handler, allowedOrigins string) http.Handler {
 	})
 }
 
-func healthz(db *sql.DB, rdb *redis.Client) http.HandlerFunc {
+func healthz(pool *pgxpool.Pool, rdb *redis.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
 
-		if err := db.PingContext(ctx); err != nil {
+		if err := pool.Ping(ctx); err != nil {
 			http.Error(w, "postgres: "+err.Error(), http.StatusServiceUnavailable)
 			return
 		}
