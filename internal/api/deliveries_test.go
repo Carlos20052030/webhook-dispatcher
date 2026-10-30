@@ -137,3 +137,23 @@ func TestListDeliveries_EmptyResult(t *testing.T) {
 		t.Errorf("next_cursor should be absent on empty page")
 	}
 }
+
+func TestListDeliveries_UnauthorizedWithoutJWT(t *testing.T) {
+	fake := &fakeDeliveryReader{}
+	h := &DeliveryHandler{Store: fake}
+	rr := httptest.NewRecorder()
+	// Request without going through RequireJWT middleware (no UserID in context)
+	req := httptest.NewRequest("GET", "/deliveries", nil)
+	h.List(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("status: got %d, want 401", rr.Code)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["error"] != "unauthorized" {
+		t.Errorf("error message: got %q, want 'unauthorized'", body["error"])
+	}
+}
