@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -44,7 +45,19 @@ func run() error {
 		os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	// Parse the connection string to handle special characters in password
+	poolConfig, err := pgxpool.ParseConfig(cfg.DatabaseURL)
+	if err != nil {
+		return fmt.Errorf("parse database URL: %w", err)
+	}
+	// Set reasonable pool defaults
+	poolConfig.MaxConns = 10
+	poolConfig.MinConns = 2
+	poolConfig.MaxConnLifetime = time.Hour
+	poolConfig.MaxConnIdleTime = 30 * time.Minute
+	poolConfig.HealthCheckPeriod = time.Minute
+
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		return fmt.Errorf("create pgxpool: %w", err)
 	}
@@ -53,7 +66,7 @@ func run() error {
 	if err := pool.Ping(ctx); err != nil {
 		return fmt.Errorf("ping postgres: %w", err)
 	}
-	slog.Info("postgres ok")
+	slog.Info("postgres ok", "max_conns", poolConfig.MaxConns)
 
 	if err := store.Migrate(ctx, pool); err != nil {
 		return fmt.Errorf("migrate: %w", err)
