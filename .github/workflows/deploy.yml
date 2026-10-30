@@ -43,5 +43,5 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
             cd /home/carlos/webhook-dispatcher
-            git pull origin main
+            git fetch origin && git reset --hard origin/main
             docker compose up -d --build
